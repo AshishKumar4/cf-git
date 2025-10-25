@@ -1,7 +1,7 @@
 import '../typedefs.js'
 
 // This is a convenience wrapper for reading and writing files in the 'refs' directory.
-import AsyncLock from 'async-lock'
+import AsyncLock from '../utils/AsyncLock.js'
 
 import { InvalidOidError } from '../errors/InvalidOidError.js'
 import { NoRefspecError } from '../errors/NoRefspecError.js'

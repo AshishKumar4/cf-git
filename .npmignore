@@ -1,0 +1,55 @@
+# Test files
+__tests__/
+*.test.js
+vitest.config.js
+jest.config.cjs
+karma.conf.cjs
+
+# Build configs
+wrangler.toml
+tsconfig.*.json
+rollup.config.js
+webpack.config.cjs
+azure-pipelines.yml
+
+# Development
+.github/
+.vscode/
+.git/
+.gitignore
+.gitattributes
+node_modules/
+
+# Docs and non-essential files
+website/
+docs/
+*.md
+!README.md
+!LICENSE.md
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Package scripts
+package-scripts.cjs
+.npsrc
+
+# Prettier/Lint
+.prettierrc.cjs
+.eslintrc.json
+.eslintignore
+.codespellrc
+
+# Release
+.releaserc
+.all-contributorsrc
+
+# Misc
+.extra/

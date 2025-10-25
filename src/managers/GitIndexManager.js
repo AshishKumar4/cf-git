@@ -1,7 +1,7 @@
 import '../typedefs.js'
 
 // import LockManager from 'travix-lock-manager'
-import AsyncLock from 'async-lock'
+import AsyncLock from '../utils/AsyncLock.js'
 
 import { UnmergedPathsError } from '../errors/UnmergedPathsError.js'
 import { GitIndex } from '../models/GitIndex.js'

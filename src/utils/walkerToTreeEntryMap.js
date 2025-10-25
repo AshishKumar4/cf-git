@@ -1,5 +1,3 @@
-import AsyncLock from 'async-lock'
-
 import { STAGE } from '../commands/STAGE.js'
 import { TREE } from '../commands/TREE.js'
 import { WORKDIR } from '../commands/WORKDIR.js'
@@ -12,6 +10,7 @@ import { GitIndexManager } from '../managers/GitIndexManager.js'
 import { _readObject } from '../storage/readObject.js'
 import { readObjectLoose } from '../storage/readObjectLoose.js'
 import { _writeObject } from '../storage/writeObject'
+import AsyncLock from '../utils/AsyncLock.js'
 
 import { join } from './join.js'
 import { posixifyPathBuffer } from './posixifyPathBuffer.js'

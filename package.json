@@ -1,15 +1,17 @@
 {
-  "name": "isomorphic-git",
-  "version": "0.0.0-development",
-  "description": "A pure JavaScript reimplementation of git for node and browsers",
+  "name": "@ashishkumar472/cf-git",
+  "version": "1.0.3",
+  "description": "A Cloudflare Workers-native fork of isomorphic-git",
   "type": "module",
-  "typings": "./index.d.cts",
-  "main": "./index.cjs",
+  "typings": "./index.d.ts",
+  "main": "./index.js",
   "module": "./index.js",
   "exports": {
     ".": {
-      "types": "./index.d.cts",
-      "default": "./index.cjs"
+      "types": "./index.d.ts",
+      "worker": "./index.js",
+      "import": "./index.js",
+      "default": "./index.js"
     },
     "./http/node": {
       "import": {
@@ -65,20 +67,27 @@
     "format": "nps format",
     "build": "nps build",
     "test": "nps test",
+    "test:workers": "vitest run __tests__/workers",
+    "test:workers:watch": "vitest __tests__/workers",
     "publish-website": "nps website",
-    "prepublishOnly": "nps prepublish",
+    "prepublishOnly": "npx nps build.rollup && npx nps build.typings",
     "semantic-release": "semantic-release",
     "add-contributor": "nps contributors.add"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/isomorphic-git/isomorphic-git.git"
+    "url": "https://github.com/AshishKumar4/cf-git.git"
   },
   "keywords": [
     "git",
-    "isomorphic"
+    "isomorphic",
+    "cloudflare",
+    "workers",
+    "edge",
+    "isomorphic-git",
+    "cloudflare-workers"
   ],
-  "author": "William Hilton <wmhilton@gmail.com>",
+  "author": "Ashish Kumar (fork maintainer), William Hilton (original author)",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/isomorphic-git/isomorphic-git/issues"
@@ -100,7 +109,6 @@
     "models/*"
   ],
   "dependencies": {
-    "async-lock": "^1.4.1",
     "clean-git-ref": "^2.0.1",
     "crc-32": "^1.2.0",
     "diff3": "0.0.3",
@@ -108,10 +116,8 @@
     "is-git-ref-name-valid": "^1.0.0",
     "minimisted": "^2.0.0",
     "pako": "^1.0.10",
-    "path-browserify": "^1.0.1",
     "pify": "^4.0.1",
     "readable-stream": "^3.4.0",
-    "sha.js": "^2.4.12",
     "simple-get": "^4.0.1"
   },
   "devDependencies": {
@@ -119,12 +125,16 @@
     "@babel/plugin-transform-async-to-generator": "7.5.0",
     "@babel/preset-env": "7.5.5",
     "@babel/runtime": "7.5.5",
+    "@cloudflare/vitest-pool-workers": "^0.8.71",
+    "@cloudflare/workers-types": "^4.20241127.0",
     "@isomorphic-git/cors-proxy": "2.7.1",
     "@isomorphic-git/lightning-fs": "^3.3.0",
     "@isomorphic-git/pgp-plugin": "0.0.7",
     "@semantic-release/exec": "5.0.0",
     "@types/jest": "^27.5.1",
     "@types/node": "12.7.2",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.45.0",
     "@wmhilton/jest-fixtures": "0.6.1",
     "agadoo": "2.0.0",
     "all-contributors-cli": "6.20.0",
