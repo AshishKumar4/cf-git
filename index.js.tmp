@@ -1,0 +1,753 @@
+class BaseError extends Error {
+  constructor(message) {
+    super(message);
+    // Setting this here allows TS to infer that all git errors have a `caller` property and
+    // that its type is string.
+    this.caller = '';
+  }
+
+  toJSON() {
+    // Error objects aren't normally serializable. So we do something about that.
+    return {
+      code: this.code,
+      data: this.data,
+      caller: this.caller,
+      message: this.message,
+      stack: this.stack,
+    }
+  }
+
+  fromJSON(json) {
+    const e = new BaseError(json.message);
+    e.code = json.code;
+    e.data = json.data;
+    e.caller = json.caller;
+    e.stack = json.stack;
+    return e
+  }
+
+  get isIsomorphicGitError() {
+    return true
+  }
+}
+
+class UnmergedPathsError extends BaseError {
+  /**
+   * @param {Array<string>} filepaths
+   */
+  constructor(filepaths) {
+    super(
+      `Modifying the index is not possible because you have unmerged files: ${filepaths.toString}. Fix them up in the work tree, and then use 'git add/rm as appropriate to mark resolution and make a commit.`
+    );
+    this.code = this.name = UnmergedPathsError.code;
+    this.data = { filepaths };
+  }
+}
+/** @type {'UnmergedPathsError'} */
+UnmergedPathsError.code = 'UnmergedPathsError';
+
+class InternalError extends BaseError {
+  /**
+   * @param {string} message
+   */
+  constructor(message) {
+    super(
+      `An internal error caused this command to fail. Please file a bug report at https://github.com/isomorphic-git/isomorphic-git/issues with this error message: ${message}`
+    );
+    this.code = this.name = InternalError.code;
+    this.data = { message };
+  }
+}
+/** @type {'InternalError'} */
+InternalError.code = 'InternalError';
+
+class UnsafeFilepathError extends BaseError {
+  /**
+   * @param {string} filepath
+   */
+  constructor(filepath) {
+    super(`The filepath "${filepath}" contains unsafe character sequences`);
+    this.code = this.name = UnsafeFilepathError.code;
+    this.data = { filepath };
+  }
+}
+/** @type {'UnsafeFilepathError'} */
+UnsafeFilepathError.code = 'UnsafeFilepathError';
+
+// Modeled after https://github.com/tjfontaine/node-buffercursor
+// but with the goal of being much lighter weight.
+class BufferCursor {
+  constructor(buffer) {
+    this.buffer = buffer;
+    this._start = 0;
+  }
+
+  eof() {
+    return this._start >= this.buffer.length
+  }
+
+  tell() {
+    return this._start
+  }
+
+  seek(n) {
+    this._start = n;
+  }
+
+  slice(n) {
+    const r = this.buffer.slice(this._start, this._start + n);
+    this._start += n;
+    return r
+  }
+
+  toString(enc, length) {
+    const r = this.buffer.toString(enc, this._start, this._start + length);
+    this._start += length;
+    return r
+  }
+
+  write(value, length, enc) {
+    const r = this.buffer.write(value, this._start, length, enc);
+    this._start += length;
+    return r
+  }
+
+  copy(source, start, end) {
+    const r = source.copy(this.buffer, this._start, start, end);
+    this._start += r;
+    return r
+  }
+
+  readUInt8() {
+    const r = this.buffer.readUInt8(this._start);
+    this._start += 1;
+    return r
+  }
+
+  writeUInt8(value) {
+    const r = this.buffer.writeUInt8(value, this._start);
+    this._start += 1;
+    return r
+  }
+
+  readUInt16BE() {
+    const r = this.buffer.readUInt16BE(this._start);
+    this._start += 2;
+    return r
+  }
+
+  writeUInt16BE(value) {
+    const r = this.buffer.writeUInt16BE(value, this._start);
+    this._start += 2;
+    return r
+  }
+
+  readUInt32BE() {
+    const r = this.buffer.readUInt32BE(this._start);
+    this._start += 4;
+    return r
+  }
+
+  writeUInt32BE(value) {
+    const r = this.buffer.writeUInt32BE(value, this._start);
+    this._start += 4;
+    return r
+  }
+}
+
+function compareStrings(a, b) {
+  // https://stackoverflow.com/a/40355107/2168416
+  return -(a < b) || +(a > b)
+}
+
+function comparePath(a, b) {
+  // https://stackoverflow.com/a/40355107/2168416
+  return compareStrings(a.path, b.path)
+}
+
+/**
+ * From https://github.com/git/git/blob/master/Documentation/technical/index-format.txt
+ *
+ * 32-bit mode, split into (high to low bits)
+ *
+ *  4-bit object type
+ *    valid values in binary are 1000 (regular file), 1010 (symbolic link)
+ *    and 1110 (gitlink)
+ *
+ *  3-bit unused
+ *
+ *  9-bit unix permission. Only 0755 and 0644 are valid for regular files.
+ *  Symbolic links and gitlinks have value 0 in this field.
+ */
+function normalizeMode(mode) {
+  // Note: BrowserFS will use -1 for "unknown"
+  // I need to make it non-negative for these bitshifts to work.
+  let type = mode > 0 ? mode >> 12 : 0;
+  // If it isn't valid, assume it as a "regular file"
+  // 0100 = directory
+  // 1000 = regular file
+  // 1010 = symlink
+  // 1110 = gitlink
+  if (
+    type !== 0b0100 &&
+    type !== 0b1000 &&
+    type !== 0b1010 &&
+    type !== 0b1110
+  ) {
+    type = 0b1000;
+  }
+  let permissions = mode & 0o777;
+  // Is the file executable? then 755. Else 644.
+  if (permissions & 0b001001001) {
+    permissions = 0o755;
+  } else {
+    permissions = 0o644;
+  }
+  // If it's not a regular file, scrub all permissions
+  if (type !== 0b1000) permissions = 0;
+  return (type << 12) + permissions
+}
+
+const MAX_UINT32 = 2 ** 32;
+
+function SecondsNanoseconds(
+  givenSeconds,
+  givenNanoseconds,
+  milliseconds,
+  date
+) {
+  if (givenSeconds !== undefined && givenNanoseconds !== undefined) {
+    return [givenSeconds, givenNanoseconds]
+  }
+  if (milliseconds === undefined) {
+    milliseconds = date.valueOf();
+  }
+  const seconds = Math.floor(milliseconds / 1000);
+  const nanoseconds = (milliseconds - seconds * 1000) * 1000000;
+  return [seconds, nanoseconds]
+}
+
+function normalizeStats(e) {
+  const [ctimeSeconds, ctimeNanoseconds] = SecondsNanoseconds(
+    e.ctimeSeconds,
+    e.ctimeNanoseconds,
+    e.ctimeMs,
+    e.ctime
+  );
+  const [mtimeSeconds, mtimeNanoseconds] = SecondsNanoseconds(
+    e.mtimeSeconds,
+    e.mtimeNanoseconds,
+    e.mtimeMs,
+    e.mtime
+  );
+
+  return {
+    ctimeSeconds: ctimeSeconds % MAX_UINT32,
+    ctimeNanoseconds: ctimeNanoseconds % MAX_UINT32,
+    mtimeSeconds: mtimeSeconds % MAX_UINT32,
+    mtimeNanoseconds: mtimeNanoseconds % MAX_UINT32,
+    dev: e.dev % MAX_UINT32,
+    ino: e.ino % MAX_UINT32,
+    mode: normalizeMode(e.mode % MAX_UINT32),
+    uid: e.uid % MAX_UINT32,
+    gid: e.gid % MAX_UINT32,
+    // size of -1 happens over a BrowserFS HTTP Backend that doesn't serve Content-Length headers
+    // (like the Karma webserver) because BrowserFS HTTP Backend uses HTTP HEAD requests to do fs.stat
+    size: e.size > -1 ? e.size % MAX_UINT32 : 0,
+  }
+}
+
+function toHex(buffer) {
+  let hex = '';
+  for (const byte of new Uint8Array(buffer)) {
+    if (byte < 16) hex += '0';
+    hex += byte.toString(16);
+  }
+  return hex
+}
+
+/* eslint-env cloudflare */
+/// <reference types="@cloudflare/workers-types" />
+
+/**
+ * Cloudflare Workers SHA-1 implementation
+ * Uses native crypto.subtle.digestSync() for synchronous hashing
+ * @param {Uint8Array | ArrayBuffer} buffer
+ * @returns {Promise<string>}
+ */
+async function shasum(buffer) {
+  // Cloudflare Workers provides digestSync for synchronous hashing
+  // @ts-ignore - digestSync is a Workers-specific extension
+  if (crypto.subtle.digestSync) {
+    // @ts-ignore - digestSync is a Workers-specific extension
+    const hash = crypto.subtle.digestSync('SHA-1', buffer);
+    return toHex(hash)
+  }
+
+  // Fallback to async crypto.subtle.digest for other environments
+  const hash = await crypto.subtle.digest('SHA-1', buffer);
+  return toHex(hash)
+}
+
+// Extract 1-bit assume-valid, 1-bit extended flag, 2-bit merge state flag, 12-bit path length flag
+function parseCacheEntryFlags(bits) {
+  return {
+    assumeValid: Boolean(bits & 0b1000000000000000),
+    extended: Boolean(bits & 0b0100000000000000),
+    stage: (bits & 0b0011000000000000) >> 12,
+    nameLength: bits & 0b0000111111111111,
+  }
+}
+
+function renderCacheEntryFlags(entry) {
+  const flags = entry.flags;
+  // 1-bit extended flag (must be zero in version 2)
+  flags.extended = false;
+  // 12-bit name length if the length is less than 0xFFF; otherwise 0xFFF
+  // is stored in this field.
+  flags.nameLength = Math.min(Buffer.from(entry.path).length, 0xfff);
+  return (
+    (flags.assumeValid ? 0b1000000000000000 : 0) +
+    (flags.extended ? 0b0100000000000000 : 0) +
+    ((flags.stage & 0b11) << 12) +
+    (flags.nameLength & 0b111111111111)
+  )
+}
+
+class GitIndex {
+  /*::
+   _entries: Map<string, CacheEntry>
+   _dirty: boolean // Used to determine if index needs to be saved to filesystem
+   */
+  constructor(entries, unmergedPaths) {
+    this._dirty = false;
+    this._unmergedPaths = unmergedPaths || new Set();
+    this._entries = entries || new Map();
+  }
+
+  _addEntry(entry) {
+    if (entry.flags.stage === 0) {
+      entry.stages = [entry];
+      this._entries.set(entry.path, entry);
+      this._unmergedPaths.delete(entry.path);
+    } else {
+      let existingEntry = this._entries.get(entry.path);
+      if (!existingEntry) {
+        this._entries.set(entry.path, entry);
+        existingEntry = entry;
+      }
+      existingEntry.stages[entry.flags.stage] = entry;
+      this._unmergedPaths.add(entry.path);
+    }
+  }
+
+  static async from(buffer) {
+    if (Buffer.isBuffer(buffer)) {
+      return GitIndex.fromBuffer(buffer)
+    } else if (buffer === null) {
+      return new GitIndex(null)
+    } else {
+      throw new InternalError('invalid type passed to GitIndex.from')
+    }
+  }
+
+  static async fromBuffer(buffer) {
+    if (buffer.length === 0) {
+      throw new InternalError('Index file is empty (.git/index)')
+    }
+
+    const index = new GitIndex();
+    const reader = new BufferCursor(buffer);
+    const magic = reader.toString('utf8', 4);
+    if (magic !== 'DIRC') {
+      throw new InternalError(`Invalid dircache magic file number: ${magic}`)
+    }
+
+    // Verify shasum after we ensured that the file has a magic number
+    const shaComputed = await shasum(buffer.slice(0, -20));
+    const shaClaimed = buffer.slice(-20).toString('hex');
+    if (shaClaimed !== shaComputed) {
+      throw new InternalError(
+        `Invalid checksum in GitIndex buffer: expected ${shaClaimed} but saw ${shaComputed}`
+      )
+    }
+
+    const version = reader.readUInt32BE();
+    if (version !== 2) {
+      throw new InternalError(`Unsupported dircache version: ${version}`)
+    }
+    const numEntries = reader.readUInt32BE();
+    let i = 0;
+    while (!reader.eof() && i < numEntries) {
+      const entry = {};
+      entry.ctimeSeconds = reader.readUInt32BE();
+      entry.ctimeNanoseconds = reader.readUInt32BE();
+      entry.mtimeSeconds = reader.readUInt32BE();
+      entry.mtimeNanoseconds = reader.readUInt32BE();
+      entry.dev = reader.readUInt32BE();
+      entry.ino = reader.readUInt32BE();
+      entry.mode = reader.readUInt32BE();
+      entry.uid = reader.readUInt32BE();
+      entry.gid = reader.readUInt32BE();
+      entry.size = reader.readUInt32BE();
+      entry.oid = reader.slice(20).toString('hex');
+      const flags = reader.readUInt16BE();
+      entry.flags = parseCacheEntryFlags(flags);
+      // TODO: handle if (version === 3 && entry.flags.extended)
+      const pathlength = buffer.indexOf(0, reader.tell() + 1) - reader.tell();
+      if (pathlength < 1) {
+        throw new InternalError(`Got a path length of: ${pathlength}`)
+      }
+      // TODO: handle pathnames larger than 12 bits
+      entry.path = reader.toString('utf8', pathlength);
+
+      // Prevent malicious paths like "..\foo"
+      if (entry.path.includes('..\\') || entry.path.includes('../')) {
+        throw new UnsafeFilepathError(entry.path)
+      }
+
+      // The next bit is awkward. We expect 1 to 8 null characters
+      // such that the total size of the entry is a multiple of 8 bits.
+      // (Hence subtract 12 bytes for the header.)
+      let padding = 8 - ((reader.tell() - 12) % 8);
+      if (padding === 0) padding = 8;
+      while (padding--) {
+        const tmp = reader.readUInt8();
+        if (tmp !== 0) {
+          throw new InternalError(
+            `Expected 1-8 null characters but got '${tmp}' after ${entry.path}`
+          )
+        } else if (reader.eof()) {
+          throw new InternalError('Unexpected end of file')
+        }
+      }
+      // end of awkward part
+      entry.stages = [];
+
+      index._addEntry(entry);
+
+      i++;
+    }
+    return index
+  }
+
+  get unmergedPaths() {
+    return [...this._unmergedPaths]
+  }
+
+  get entries() {
+    return [...this._entries.values()].sort(comparePath)
+  }
+
+  get entriesMap() {
+    return this._entries
+  }
+
+  get entriesFlat() {
+    return [...this.entries].flatMap(entry => {
+      return entry.stages.length > 1 ? entry.stages.filter(x => x) : entry
+    })
+  }
+
+  *[Symbol.iterator]() {
+    for (const entry of this.entries) {
+      yield entry;
+    }
+  }
+
+  insert({ filepath, stats, oid, stage = 0 }) {
+    if (!stats) {
+      stats = {
+        ctimeSeconds: 0,
+        ctimeNanoseconds: 0,
+        mtimeSeconds: 0,
+        mtimeNanoseconds: 0,
+        dev: 0,
+        ino: 0,
+        mode: 0,
+        uid: 0,
+        gid: 0,
+        size: 0,
+      };
+    }
+    stats = normalizeStats(stats);
+    const bfilepath = Buffer.from(filepath);
+    const entry = {
+      ctimeSeconds: stats.ctimeSeconds,
+      ctimeNanoseconds: stats.ctimeNanoseconds,
+      mtimeSeconds: stats.mtimeSeconds,
+      mtimeNanoseconds: stats.mtimeNanoseconds,
+      dev: stats.dev,
+      ino: stats.ino,
+      // We provide a fallback value for `mode` here because not all fs
+      // implementations assign it, but we use it in GitTree.
+      // '100644' is for a "regular non-executable file"
+      mode: stats.mode || 0o100644,
+      uid: stats.uid,
+      gid: stats.gid,
+      size: stats.size,
+      path: filepath,
+      oid: oid,
+      flags: {
+        assumeValid: false,
+        extended: false,
+        stage,
+        nameLength: bfilepath.length < 0xfff ? bfilepath.length : 0xfff,
+      },
+      stages: [],
+    };
+
+    this._addEntry(entry);
+
+    this._dirty = true;
+  }
+
+  delete({ filepath }) {
+    if (this._entries.has(filepath)) {
+      this._entries.delete(filepath);
+    } else {
+      for (const key of this._entries.keys()) {
+        if (key.startsWith(filepath + '/')) {
+          this._entries.delete(key);
+        }
+      }
+    }
+
+    if (this._unmergedPaths.has(filepath)) {
+      this._unmergedPaths.delete(filepath);
+    }
+    this._dirty = true;
+  }
+
+  clear() {
+    this._entries.clear();
+    this._dirty = true;
+  }
+
+  has({ filepath }) {
+    return this._entries.has(filepath)
+  }
+
+  render() {
+    return this.entries
+      .map(entry => `${entry.mode.toString(8)} ${entry.oid}    ${entry.path}`)
+      .join('\n')
+  }
+
+  static async _entryToBuffer(entry) {
+    const bpath = Buffer.from(entry.path);
+    // the fixed length + the filename + at least one null char => align by 8
+    const length = Math.ceil((62 + bpath.length + 1) / 8) * 8;
+    const written = Buffer.alloc(length);
+    const writer = new BufferCursor(written);
+    const stat = normalizeStats(entry);
+    writer.writeUInt32BE(stat.ctimeSeconds);
+    writer.writeUInt32BE(stat.ctimeNanoseconds);
+    writer.writeUInt32BE(stat.mtimeSeconds);
+    writer.writeUInt32BE(stat.mtimeNanoseconds);
+    writer.writeUInt32BE(stat.dev);
+    writer.writeUInt32BE(stat.ino);
+    writer.writeUInt32BE(stat.mode);
+    writer.writeUInt32BE(stat.uid);
+    writer.writeUInt32BE(stat.gid);
+    writer.writeUInt32BE(stat.size);
+    writer.write(entry.oid, 20, 'hex');
+    writer.writeUInt16BE(renderCacheEntryFlags(entry));
+    writer.write(entry.path, bpath.length, 'utf8');
+    return written
+  }
+
+  async toObject() {
+    const header = Buffer.alloc(12);
+    const writer = new BufferCursor(header);
+    writer.write('DIRC', 4, 'utf8');
+    writer.writeUInt32BE(2);
+    writer.writeUInt32BE(this.entriesFlat.length);
+
+    let entryBuffers = [];
+    for (const entry of this.entries) {
+      entryBuffers.push(GitIndex._entryToBuffer(entry));
+      if (entry.stages.length > 1) {
+        for (const stage of entry.stages) {
+          if (stage && stage !== entry) {
+            entryBuffers.push(GitIndex._entryToBuffer(stage));
+          }
+        }
+      }
+    }
+    entryBuffers = await Promise.all(entryBuffers);
+
+    const body = Buffer.concat(entryBuffers);
+    const main = Buffer.concat([header, body]);
+    const sum = await shasum(main);
+    return Buffer.concat([main, Buffer.from(sum, 'hex')])
+  }
+}
+
+/**
+ * Simple async lock for Cloudflare Workers
+ * Provides mutual exclusion for async operations
+ */
+class AsyncLock {
+  constructor() {
+    this.locks = new Map();
+  }
+
+  async acquire(key) {
+    const lockKey = Array.isArray(key) ? key.join(':') : key;
+
+    // Wait for existing lock to release
+    while (this.locks.has(lockKey)) {
+      await this.locks.get(lockKey);
+    }
+
+    // Create new lock
+    let releaseFn;
+    const lockPromise = new Promise(resolve => {
+      releaseFn = resolve;
+    });
+
+    this.locks.set(lockKey, lockPromise);
+
+    // Return release function
+    return () => {
+      this.locks.delete(lockKey);
+      releaseFn();
+    }
+  }
+
+  async run(key, fn) {
+    const release = await this.acquire(key);
+    try {
+      return await fn()
+    } finally {
+      release();
+    }
+  }
+}
+
+function compareStats(entry, stats, filemode = true, trustino = true) {
+  // Comparison based on the description in Paragraph 4 of
+  // https://www.kernel.org/pub/software/scm/git/docs/technical/racy-git.txt
+  const e = normalizeStats(entry);
+  const s = normalizeStats(stats);
+  const staleness =
+    (filemode && e.mode !== s.mode) ||
+    e.mtimeSeconds !== s.mtimeSeconds ||
+    e.ctimeSeconds !== s.ctimeSeconds ||
+    e.uid !== s.uid ||
+    e.gid !== s.gid ||
+    (trustino && e.ino !== s.ino) ||
+    e.size !== s.size;
+  return staleness
+}
+
+// import Lock from '../utils.js'
+
+// const lm = new LockManager()
+let lock = null;
+
+const IndexCache = Symbol('IndexCache');
+
+/**
+ * Creates a cache object to store GitIndex and file stats.
+ * @returns {object} A cache object with `map` and `stats` properties.
+ */
+function createCache() {
+  return {
+    map: new Map(),
+    stats: new Map(),
+  }
+}
+
+/**
+ * Updates the cached index file by reading the file system and parsing the Git index.
+ * @param {FSClient} fs - A file system implementation.
+ * @param {string} filepath - The path to the Git index file.
+ * @param {object} cache - The cache object to update.
+ * @returns {Promise<void>}
+ */
+async function updateCachedIndexFile(fs, filepath, cache) {
+  const [stat, rawIndexFile] = await Promise.all([
+    fs.lstat(filepath),
+    fs.read(filepath),
+  ]);
+
+  const index = await GitIndex.from(rawIndexFile);
+  // cache the GitIndex object so we don't need to re-read it every time.
+  cache.map.set(filepath, index);
+  // Save the stat data for the index so we know whether the cached file is stale (modified by an outside process).
+  cache.stats.set(filepath, stat);
+}
+
+/**
+ * Determines whether the cached index file is stale by comparing file stats.
+ * @param {FSClient} fs - A file system implementation.
+ * @param {string} filepath - The path to the Git index file.
+ * @param {object} cache - The cache object containing file stats.
+ * @returns {Promise<boolean>} `true` if the index file is stale, otherwise `false`.
+ */
+async function isIndexStale(fs, filepath, cache) {
+  const savedStats = cache.stats.get(filepath);
+  if (savedStats === undefined) return true
+  if (savedStats === null) return false
+
+  const currStats = await fs.lstat(filepath);
+  if (currStats === null) return false
+  return compareStats(savedStats, currStats)
+}
+
+class GitIndexManager {
+  /**
+   * Manages access to the Git index file, ensuring thread-safe operations and caching.
+   *
+   * @param {object} opts - Options for acquiring the Git index.
+   * @param {FSClient} opts.fs - A file system implementation.
+   * @param {string} opts.gitdir - The path to the `.git` directory.
+   * @param {object} opts.cache - A shared cache object for storing index data.
+   * @param {boolean} [opts.allowUnmerged=true] - Whether to allow unmerged paths in the index.
+   * @param {function(GitIndex): any} closure - A function to execute with the Git index.
+   * @returns {Promise<any>} The result of the closure function.
+   * @throws {UnmergedPathsError} If unmerged paths exist and `allowUnmerged` is `false`.
+   */
+  static async acquire({ fs, gitdir, cache, allowUnmerged = true }, closure) {
+    if (!cache[IndexCache]) {
+      cache[IndexCache] = createCache();
+    }
+
+    const filepath = `${gitdir}/index`;
+    if (lock === null) lock = new AsyncLock();
+    let result;
+    let unmergedPaths = [];
+    await lock.run(filepath, async () => {
+      // Acquire a file lock while we're reading the index
+      // to make sure other processes aren't writing to it
+      // simultaneously, which could result in a corrupted index.
+      // const fileLock = await Lock(filepath)
+      const theIndexCache = cache[IndexCache];
+      if (await isIndexStale(fs, filepath, theIndexCache)) {
+        await updateCachedIndexFile(fs, filepath, theIndexCache);
+      }
+      const index = theIndexCache.map.get(filepath);
+      unmergedPaths = index.unmergedPaths;
+
+      if (unmergedPaths.length && !allowUnmerged)
+        throw new UnmergedPathsError(unmergedPaths)
+
+      result = await closure(index);
+      if (index._dirty) {
+        // Acquire a file lock while we're writing the index file
+        // let fileLock = await Lock(filepath)
+        const buffer = await index.toObject();
+        await fs.write(filepath, buffer);
+        // Update cached stat value
+        theIndexCache.stats.set(filepath, await fs.lstat(filepath));
+        index._dirty = false;
+      }
+    });
+
+    return result
+  }
+}
+
+export { GitIndexManager };

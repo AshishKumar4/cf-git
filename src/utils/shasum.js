@@ -1,37 +1,23 @@
-/* eslint-env node, browser */
-import Hash from 'sha.js/sha1.js'
-
+/* eslint-env cloudflare */
+/// <reference types="@cloudflare/workers-types" />
 import { toHex } from './toHex.js'
 
-let supportsSubtleSHA1 = null
-
+/**
+ * Cloudflare Workers SHA-1 implementation
+ * Uses native crypto.subtle.digestSync() for synchronous hashing
+ * @param {Uint8Array | ArrayBuffer} buffer
+ * @returns {Promise<string>}
+ */
 export async function shasum(buffer) {
-  if (supportsSubtleSHA1 === null) {
-    supportsSubtleSHA1 = await testSubtleSHA1()
+  // Cloudflare Workers provides digestSync for synchronous hashing
+  // @ts-ignore - digestSync is a Workers-specific extension
+  if (crypto.subtle.digestSync) {
+    // @ts-ignore - digestSync is a Workers-specific extension
+    const hash = crypto.subtle.digestSync('SHA-1', buffer)
+    return toHex(hash)
   }
-  return supportsSubtleSHA1 ? subtleSHA1(buffer) : shasumSync(buffer)
-}
 
-// This is modeled after @dominictarr's "shasum" module,
-// but without the 'json-stable-stringify' dependency and
-// extra type-casting features.
-function shasumSync(buffer) {
-  return new Hash().update(buffer).digest('hex')
-}
-
-async function subtleSHA1(buffer) {
+  // Fallback to async crypto.subtle.digest for other environments
   const hash = await crypto.subtle.digest('SHA-1', buffer)
   return toHex(hash)
-}
-
-async function testSubtleSHA1() {
-  // I'm using a rather crude method of progressive enhancement, because
-  // some browsers that have crypto.subtle.digest don't actually implement SHA-1.
-  try {
-    const hash = await subtleSHA1(new Uint8Array([]))
-    return hash === 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
-  } catch (_) {
-    // no bother
-  }
-  return false
 }

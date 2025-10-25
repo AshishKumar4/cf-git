@@ -1,10 +1,43 @@
-import Hash from 'sha.js/sha1.js'
-
 import { types } from '../commands/types.js'
 import { _readObject as readObject } from '../storage/readObject.js'
 import { deflate } from '../utils/deflate.js'
 import { join } from '../utils/join.js'
 import { padHex } from '../utils/padHex.js'
+
+/**
+ * Simple Hash class for Cloudflare Workers
+ * Buffers data and computes SHA-1 hash synchronously
+ */
+class Hash {
+  constructor() {
+    this.data = []
+  }
+
+  update(chunk) {
+    this.data.push(chunk)
+    return this
+  }
+
+  digest() {
+    // Concatenate all chunks
+    const totalLength = this.data.reduce((sum, arr) => sum + arr.length, 0)
+    const combined = new Uint8Array(totalLength)
+    let offset = 0
+    for (const chunk of this.data) {
+      combined.set(chunk, offset)
+      offset += chunk.length
+    }
+
+    // Use Workers crypto.subtle.digestSync
+    if (crypto.subtle.digestSync) {
+      const hashBuffer = crypto.subtle.digestSync('SHA-1', combined)
+      return Buffer.from(hashBuffer)
+    }
+    
+    // This shouldn't happen in Workers, but provide error
+    throw new Error('digestSync not available - pack requires Cloudflare Workers')
+  }
+}
 
 /**
  * @param {object} args

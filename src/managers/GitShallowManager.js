@@ -1,5 +1,5 @@
 import '../typedefs.js'
-import AsyncLock from 'async-lock'
+import AsyncLock from '../utils/AsyncLock.js'
 
 import { join } from '../utils/join.js'
 
