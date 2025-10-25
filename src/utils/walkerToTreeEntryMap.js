@@ -23,7 +23,7 @@ const _TreeMap = {
 let lock
 export async function acquireLock(ref, callback) {
   if (lock === undefined) lock = new AsyncLock()
-  return lock.acquire(ref, callback)
+  return lock.run(ref, callback)
 }
 
 // make sure filepath, blob type and blob object (from loose objects) plus oid are in sync and valid

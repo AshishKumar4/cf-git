@@ -30,7 +30,7 @@ let lock
 
 async function acquireLock(ref, callback) {
   if (lock === undefined) lock = new AsyncLock()
-  return lock.acquire(ref, callback)
+  return lock.run(ref, callback)
 }
 
 /**

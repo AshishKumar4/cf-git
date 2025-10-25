@@ -3,6 +3,7 @@ import { _readObject as readObject } from '../storage/readObject.js'
 import { deflate } from '../utils/deflate.js'
 import { join } from '../utils/join.js'
 import { padHex } from '../utils/padHex.js'
+import { createHash } from 'crypto'
 
 /**
  * Simple Hash class for Cloudflare Workers
@@ -28,14 +29,16 @@ class Hash {
       offset += chunk.length
     }
 
-    // Use Workers crypto.subtle.digestSync
-    if (crypto.subtle.digestSync) {
+    // Use Workers crypto.subtle.digestSync if available (production Workers)
+    if (crypto?.subtle?.digestSync) {
       const hashBuffer = crypto.subtle.digestSync('SHA-1', combined)
       return Buffer.from(hashBuffer)
     }
     
-    // This shouldn't happen in Workers, but provide error
-    throw new Error('digestSync not available - pack requires Cloudflare Workers')
+    // Fallback: Use Node.js crypto (wrangler dev / local)
+    const hash = createHash('sha1')
+    hash.update(combined)
+    return hash.digest()
   }
 }
 
