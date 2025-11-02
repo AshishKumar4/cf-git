@@ -111,6 +111,7 @@
   "dependencies": {
     "clean-git-ref": "^2.0.1",
     "crc-32": "^1.2.0",
+    "diff": "^5.1.0",
     "diff3": "0.0.3",
     "ignore": "^5.1.4",
     "is-git-ref-name-valid": "^1.0.0",

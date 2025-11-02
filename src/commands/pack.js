@@ -38,7 +38,7 @@ class Hash {
     }
 
     // Use Workers crypto.subtle.digestSync if available
-    if (crypto?.subtle?.digestSync) {
+    if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digestSync) {
       const hashBuffer = crypto.subtle.digestSync('SHA-1', combined)
       return Buffer.from(hashBuffer)
     }
