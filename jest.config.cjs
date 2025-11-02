@@ -8,6 +8,7 @@ module.exports = {
   },
   collectCoverageFrom: ['src/*.js', 'src/**/*.js'],
   testEnvironment: 'node',
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
   reporters: [
     'default',
     [

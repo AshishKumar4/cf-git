@@ -1,6 +1,6 @@
 # @ashishkumar472/cf-git
 
-A Cloudflare Workers-native fork of [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git), optimized specifically for the Cloudflare Workers runtime.
+A Cloudflare Workers-native fork of [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git), ported to work with the Cloudflare Workers runtime.
 
 [![npm version](https://badge.fury.io/js/@ashishkumar472%2Fcf-git.svg)](https://www.npmjs.com/package/@ashishkumar472/cf-git)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

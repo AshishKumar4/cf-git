@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest'
+/* global describe, test, expect */
 import {
   findDeltaBase,
   computeSimilarityScore,
@@ -396,6 +396,6 @@ describe('Constants', () => {
 
   test('MIN_SIZE_FOR_DELTA is defined', () => {
     expect(MIN_SIZE_FOR_DELTA).toBeGreaterThan(0)
-    expect(MIN_SIZE_FOR_DELTA).toBe(50)
+    expect(MIN_SIZE_FOR_DELTA).toBe(16) // Git's minimum (one window size)
   })
 })

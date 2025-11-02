@@ -1,17 +1,15 @@
 /**
- * Git Delta Generation
- * Creates deltas in git's exact binary pack format
- * Uses Rabin fingerprinting for efficient match finding
+ * Git Delta Generation V2
+ * Uses proven 'diff' library for finding changes
+ * Encodes in git's exact binary pack format
  */
 
-import { DeltaIndex } from './deltaIndex.js'
-import { RABIN_WINDOW } from './rabinFingerprint.js'
+import * as Diff from 'diff'
 
-const MIN_COPY_LENGTH = RABIN_WINDOW // Minimum match to use COPY
-const MAX_INSERT_LENGTH = 127 // Maximum single INSERT instruction
+const MIN_COPY_LENGTH = 16 // Minimum match to use COPY (Git standard)
 
 /**
- * Create git delta from source to target
+ * Create git delta from source to target using diff algorithm
  * @param {Buffer} source - Base buffer
  * @param {Buffer} target - Target buffer
  * @returns {Buffer} Delta in git pack format
@@ -26,48 +24,47 @@ export function createDelta(source, target) {
     return encodeDelta(source.length, 0, [])
   }
 
-  // Build index of source
-  const index = new DeltaIndex(source)
-
-  // Generate instructions
+  // Use diff library to find changes at byte level
+  const sourceStr = source.toString('binary')
+  const targetStr = target.toString('binary')
+  
+  const patches = Diff.diffChars(sourceStr, targetStr)
+  
+  // Convert diff patches to COPY/INSERT instructions
   const instructions = []
-  let pos = 0
-
-  while (pos < target.length) {
-    const match = index.findMatch(target, pos)
-
-    if (match && match.length >= MIN_COPY_LENGTH) {
-      // Good match found - emit COPY instruction
-      instructions.push({
-        type: 'COPY',
-        srcOffset: match.srcOffset,
-        length: match.length,
-      })
-      pos += match.length
-    } else {
-      // No good match - accumulate bytes for INSERT
-      const insertStart = pos
-      let insertEnd = pos + 1
-
-      // Look ahead to see if there's a good match soon
-      while (insertEnd < target.length) {
-        const nextMatch = index.findMatch(target, insertEnd)
-        if (nextMatch && nextMatch.length >= MIN_COPY_LENGTH) {
-          break // Found good match, stop accumulating
-        }
-        insertEnd++
-
-        // Don't let INSERT get too large
-        if (insertEnd - insertStart >= MAX_INSERT_LENGTH) {
-          break
-        }
+  let sourcePos = 0
+  let targetPos = 0
+  
+  for (const patch of patches) {
+    const length = patch.value.length
+    
+    if (!patch.added && !patch.removed) {
+      // Unchanged - this is a COPY from source
+      if (length >= MIN_COPY_LENGTH) {
+        instructions.push({
+          type: 'COPY',
+          srcOffset: sourcePos,
+          length: length,
+        })
+      } else {
+        // Too small for COPY, treat as INSERT
+        instructions.push({
+          type: 'INSERT',
+          data: target.slice(targetPos, targetPos + length),
+        })
       }
-
+      sourcePos += length
+      targetPos += length
+    } else if (patch.removed) {
+      // Deleted from source - just advance source position
+      sourcePos += length
+    } else if (patch.added) {
+      // Added to target - INSERT instruction
       instructions.push({
         type: 'INSERT',
-        data: target.slice(insertStart, insertEnd),
+        data: Buffer.from(patch.value, 'binary'),
       })
-      pos = insertEnd
+      targetPos += length
     }
   }
 
@@ -77,118 +74,112 @@ export function createDelta(source, target) {
 
 /**
  * Encode delta instructions in git's binary pack format
- * @private
+ * Format: <src_size><tgt_size><instruction>*
  */
-function encodeDelta(sourceSize, targetSize, instructions) {
-  const opcodes = []
+function encodeDelta(srcSize, tgtSize, instructions) {
+  const parts = []
 
-  // Write header: source size and target size (varint)
-  writeVarInt(opcodes, sourceSize)
-  writeVarInt(opcodes, targetSize)
+  // Encode source size (variable length)
+  parts.push(encodeSize(srcSize))
 
-  // Write instructions
+  // Encode target size (variable length)
+  parts.push(encodeSize(tgtSize))
+
+  // Encode each instruction
   for (const instr of instructions) {
     if (instr.type === 'COPY') {
-      encodeCopyInstruction(opcodes, instr.srcOffset, instr.length)
+      parts.push(encodeCopyInstruction(instr.srcOffset, instr.length))
     } else {
-      encodeInsertInstruction(opcodes, instr.data)
+      parts.push(encodeInsertInstruction(instr.data))
     }
   }
 
-  return Buffer.from(opcodes)
+  return Buffer.concat(parts)
+}
+
+/**
+ * Encode a size in variable-length format
+ */
+function encodeSize(size) {
+  const bytes = []
+  let value = size
+
+  do {
+    let byte = value & 0x7f
+    value >>>= 7
+    if (value !== 0) {
+      byte |= 0x80
+    }
+    bytes.push(byte)
+  } while (value !== 0)
+
+  return Buffer.from(bytes)
 }
 
 /**
  * Encode COPY instruction
- * Format: 1xxxxxxx [offset bytes] [size bytes]
- * @private
+ * Format: 1xxxxxxx [offset1 offset2 offset3 offset4] [size1 size2 size3]
  */
-function encodeCopyInstruction(opcodes, offset, length) {
-  let code = 0x80 // MSB = 1 for COPY
-  const codeIdx = opcodes.length
-  opcodes.push(0) // Placeholder for code byte
+function encodeCopyInstruction(offset, size) {
+  const parts = []
+  let command = 0x80
 
-  // Encode offset (4 bytes max, little-endian)
-  if (offset & 0xff) {
-    opcodes.push(offset & 0xff)
-    code |= 0x01
-  }
-  if (offset & 0xff00) {
-    opcodes.push((offset >> 8) & 0xff)
-    code |= 0x02
-  }
-  if (offset & 0xff0000) {
-    opcodes.push((offset >> 16) & 0xff)
-    code |= 0x04
-  }
-  if (offset & 0xff000000) {
-    opcodes.push((offset >> 24) & 0xff)
-    code |= 0x08
+  // Encode offset (up to 4 bytes)
+  const offsetBytes = []
+  for (let i = 0; i < 4; i++) {
+    const byte = (offset >>> (i * 8)) & 0xff
+    if (byte !== 0 || offsetBytes.length > 0) {
+      offsetBytes.push(byte)
+      command |= 1 << i
+    }
   }
 
-  // Encode length (3 bytes max, little-endian)
-  if (length & 0xff) {
-    opcodes.push(length & 0xff)
-    code |= 0x10
-  }
-  if (length & 0xff00) {
-    opcodes.push((length >> 8) & 0xff)
-    code |= 0x20
-  }
-  if (length & 0xff0000) {
-    opcodes.push((length >> 16) & 0xff)
-    code |= 0x40
+  // Encode size (up to 3 bytes)
+  const sizeBytes = []
+  for (let i = 0; i < 3; i++) {
+    const byte = (size >>> (i * 8)) & 0xff
+    if (byte !== 0 || sizeBytes.length > 0) {
+      sizeBytes.push(byte)
+      command |= 1 << (i + 4)
+    }
   }
 
-  // Special case: length 0 means 0x10000 (65536)
-  if (length === 0x10000) {
-    code &= ~0x70 // Clear length bits
+  // If size is 0, it means 0x10000
+  if (sizeBytes.length === 0) {
+    // Size of 0 means 64KB
   }
 
-  // Write code byte
-  opcodes[codeIdx] = code
+  parts.push(Buffer.from([command]))
+  if (offsetBytes.length > 0) {
+    parts.push(Buffer.from(offsetBytes))
+  }
+  if (sizeBytes.length > 0) {
+    parts.push(Buffer.from(sizeBytes))
+  }
+
+  return Buffer.concat(parts)
 }
 
 /**
  * Encode INSERT instruction
- * Format: 0xxxxxxx [data bytes]
- * @private
+ * Format: 0xxxxxxx <data>
+ * where xxxxxxx is the size (max 127)
  */
-function encodeInsertInstruction(opcodes, data) {
-  const length = data.length
-
-  if (length === 0) {
-    throw new Error('INSERT length cannot be 0')
+function encodeInsertInstruction(data) {
+  const size = data.length
+  if (size > 127) {
+    // Split into multiple INSERT instructions
+    const parts = []
+    for (let i = 0; i < size; i += 127) {
+      const chunkSize = Math.min(127, size - i)
+      const chunk = data.slice(i, i + chunkSize)
+      parts.push(Buffer.from([chunkSize]))
+      parts.push(chunk)
+    }
+    return Buffer.concat(parts)
   }
 
-  if (length > MAX_INSERT_LENGTH) {
-    throw new Error(`INSERT length ${length} exceeds max ${MAX_INSERT_LENGTH}`)
-  }
-
-  // MSB = 0, lower 7 bits = length
-  opcodes.push(length & 0x7f)
-
-  // Append data bytes
-  for (let i = 0; i < length; i++) {
-    opcodes.push(data[i])
-  }
-}
-
-/**
- * Write variable-length integer (LEB128)
- * @private
- */
-function writeVarInt(opcodes, value) {
-  opcodes.push(value & 0x7f)
-  value >>>= 7
-
-  let i = opcodes.length - 1
-  while (value > 0) {
-    opcodes[i] |= 0x80 // Set continuation bit
-    opcodes.push(value & 0x7f)
-    value >>>= 7
-    i = opcodes.length - 1
-  }
+  return Buffer.concat([Buffer.from([size]), data])
 }
 
 /**
@@ -198,40 +189,33 @@ function writeVarInt(opcodes, value) {
  * @returns {Object} Delta statistics
  */
 export function analyzeDelta(source, target) {
-  const index = new DeltaIndex(source)
+  const sourceStr = source.toString('binary')
+  const targetStr = target.toString('binary')
+  const patches = Diff.diffChars(sourceStr, targetStr)
 
   let copyBytes = 0
   let insertBytes = 0
   let copyInstructions = 0
   let insertInstructions = 0
-  let pos = 0
 
-  while (pos < target.length) {
-    const match = index.findMatch(target, pos)
+  for (const patch of patches) {
+    const length = patch.value.length
 
-    if (match && match.length >= MIN_COPY_LENGTH) {
-      copyBytes += match.length
-      copyInstructions++
-      pos += match.length
-    } else {
-      const insertStart = pos
-      let insertEnd = pos + 1
-
-      while (insertEnd < target.length) {
-        const nextMatch = index.findMatch(target, insertEnd)
-        if (nextMatch && nextMatch.length >= MIN_COPY_LENGTH) {
-          break
-        }
-        insertEnd++
-        if (insertEnd - insertStart >= MAX_INSERT_LENGTH) {
-          break
-        }
+    if (!patch.added && !patch.removed) {
+      // Unchanged - would be a COPY
+      if (length >= MIN_COPY_LENGTH) {
+        copyBytes += length
+        copyInstructions++
+      } else {
+        insertBytes += length
+        insertInstructions++
       }
-
-      insertBytes += insertEnd - insertStart
+    } else if (patch.added) {
+      // Added - INSERT
+      insertBytes += length
       insertInstructions++
-      pos = insertEnd
     }
+    // removed patches don't add to target
   }
 
   return {
@@ -246,4 +230,6 @@ export function analyzeDelta(source, target) {
   }
 }
 
-export { MIN_COPY_LENGTH, MAX_INSERT_LENGTH }
+// Export constants for compatibility
+export { MIN_COPY_LENGTH }
+export const MAX_INSERT_LENGTH = 127

@@ -4,7 +4,7 @@
  */
 
 const MAX_DELTA_CHAIN_DEPTH = 50 // Git default
-const MIN_SIZE_FOR_DELTA = 50 // Don't delta very small objects
+const MIN_SIZE_FOR_DELTA = 16 // Git's minimum (one window size)
 
 /**
  * Find best base object for creating a delta
@@ -128,9 +128,13 @@ export function sortBySimilarity(objects) {
     byPath.get(key).push(obj)
   }
 
+  // Sort paths alphabetically for consistent ordering
+  const sortedKeys = Array.from(byPath.keys()).sort()
+
   // Within each group, sort by size (similar sizes together)
   const sorted = []
-  for (const group of byPath.values()) {
+  for (const key of sortedKeys) {
+    const group = byPath.get(key)
     group.sort((a, b) => a.data.length - b.data.length)
     sorted.push(...group)
   }

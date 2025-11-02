@@ -18,6 +18,11 @@ export function applyDelta(delta, source) {
   const targetSize = readVarIntLE(reader)
   let target
 
+  // Handle empty target (no operations)
+  if (targetSize === 0) {
+    return Buffer.alloc(0)
+  }
+
   const firstOp = readOp(reader, source)
   // Speed optimization - return raw buffer if it's just single simple copy
   if (firstOp.byteLength === targetSize) {

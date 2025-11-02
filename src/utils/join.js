@@ -11,13 +11,15 @@ export function join(...paths) {
   for (let i = 0; i < paths.length; i++) {
     const arg = paths[i]
     if (arg && typeof arg === 'string' && arg.length > 0) {
-      // If segment starts with '/', it's an absolute path that overrides previous segments
-      if (arg.charCodeAt(0) === 47) {
-        joined = arg
-      } else if (joined === undefined) {
+      // Only the FIRST argument with '/' makes it absolute (like Node's path.join)
+      if (joined === undefined) {
         joined = arg
       } else {
-        joined += '/' + arg
+        // Strip leading slash from subsequent arguments before joining
+        const cleanArg = arg.charCodeAt(0) === 47 ? arg.slice(1) : arg
+        if (cleanArg.length > 0) {
+          joined += '/' + cleanArg
+        }
       }
     }
   }
