@@ -22,13 +22,13 @@ describe('join - path-browserify compatibility', () => {
     { args: ['foo/x/', '.', 'bar'], expected: 'foo/x/bar' },
     { args: ['.', '.', '.'], expected: '.' },
     { args: ['.', './', '.'], expected: '.' },
-    { args: ['.', '/./', '.'], expected: '/' },
-    { args: ['.', '/////./', '.'], expected: '/' },
+    { args: ['.', '/./', '.'], expected: '.' },
+    { args: ['.', '/////./', '.'], expected: '.' },
     { args: ['.'], expected: '.' },
     { args: ['', '.'], expected: '.' },
-    { args: ['foo', '/bar'], expected: '/bar' },
+    { args: ['foo', '/bar'], expected: 'foo/bar' },
     { args: ['foo', ''], expected: 'foo' },
-    { args: ['foo', '', '/bar'], expected: '/bar' },
+    { args: ['foo', '', '/bar'], expected: 'foo/bar' },
     { args: ['/'], expected: '/' },
     { args: ['/', '.'], expected: '/' },
     { args: [''], expected: '.' },
@@ -72,7 +72,7 @@ describe('join - path normalization', () => {
 
   it('should remove duplicate slashes', () => {
     expect(join('foo//bar', 'baz')).toBe('foo/bar/baz')
-    expect(join('foo', '//bar')).toBe('/bar')
+    expect(join('foo', '//bar')).toBe('foo/bar')
     expect(join('///foo///bar///')).toBe('/foo/bar/')
   })
 
@@ -102,9 +102,10 @@ describe('join - edge cases', () => {
     expect(join('.')).toBe('.')
   })
 
-  it('should handle absolute path override', () => {
-    expect(join('foo/bar', '/baz')).toBe('/baz')
-    expect(join('foo', 'bar', '/baz')).toBe('/baz')
+  it('should strip leading slashes from non-first arguments (Node.js behavior)', () => {
+    // Node.js and path-browserify strip leading slashes from subsequent arguments
+    expect(join('foo/bar', '/baz')).toBe('foo/bar/baz')
+    expect(join('foo', 'bar', '/baz')).toBe('foo/bar/baz')
   })
 
   it('should handle whitespace', () => {
