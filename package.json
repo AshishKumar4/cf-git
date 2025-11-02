@@ -1,6 +1,6 @@
 {
   "name": "@ashishkumar472/cf-git",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "A Cloudflare Workers-native fork of isomorphic-git",
   "type": "module",
   "typings": "./index.d.ts",
